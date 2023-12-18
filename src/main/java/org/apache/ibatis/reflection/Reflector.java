@@ -54,6 +54,8 @@ import org.apache.ibatis.util.MapUtil;
 public class Reflector {
 
   private static final MethodHandle isRecordMethodHandle = getIsRecordMethodHandle();
+
+  // 当前类对象
   private final Class<?> type;
   private final String[] readablePropertyNames;
   private final String[] writablePropertyNames;
@@ -61,6 +63,7 @@ public class Reflector {
   private final Map<String, Invoker> getMethods = new HashMap<>();
   private final Map<String, Class<?>> setTypes = new HashMap<>();
   private final Map<String, Class<?>> getTypes = new HashMap<>();
+  // 默认无参构造函数
   private Constructor<?> defaultConstructor;
 
   private final Map<String, String> caseInsensitivePropertyMap = new HashMap<>();
@@ -91,10 +94,15 @@ public class Reflector {
         .forEach(m -> addGetMethod(m.getName(), m, false));
   }
 
+  /**
+   * 查询默认无参构造函数
+   */
   private void addDefaultConstructor(Class<?> clazz) {
     Constructor<?>[] constructors = clazz.getDeclaredConstructors();
-    Arrays.stream(constructors).filter(constructor -> constructor.getParameterTypes().length == 0).findAny()
-        .ifPresent(constructor -> this.defaultConstructor = constructor);
+    Arrays.stream(constructors)
+      .filter(constructor -> constructor.getParameterTypes().length == 0)
+      .findAny()
+      .ifPresent(constructor -> this.defaultConstructor = constructor);
   }
 
   private void addGetMethods(Method[] methods) {
@@ -320,6 +328,10 @@ public class Reflector {
     }
   }
 
+  /**
+   * 组装方法签名
+   * xxx#xxxx:xxx,xxx,xxx
+   */
   private String getSignature(Method method) {
     StringBuilder sb = new StringBuilder();
     Class<?> returnType = method.getReturnType();
