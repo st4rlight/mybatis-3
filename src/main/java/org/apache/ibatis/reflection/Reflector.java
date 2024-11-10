@@ -66,19 +66,27 @@ public class Reflector {
   // 默认无参构造函数
   private Constructor<?> defaultConstructor;
 
+  // 大写 --> 原名
   private final Map<String, String> caseInsensitivePropertyMap = new HashMap<>();
 
   public Reflector(Class<?> clazz) {
     type = clazz;
+    // 默认构造函数
     addDefaultConstructor(clazz);
+    // 获取当前类的所有方法
     Method[] classMethods = getClassMethods(clazz);
+
     if (isRecord(type)) {
+      // record只有get方法
       addRecordGetMethods(classMethods);
     } else {
+      // 非record类有get也有set
       addGetMethods(classMethods);
       addSetMethods(classMethods);
+      // 剩下的field，提供默认的反射实现setter、getter
       addFields(clazz);
     }
+
     readablePropertyNames = getMethods.keySet().toArray(new String[0]);
     writablePropertyNames = setMethods.keySet().toArray(new String[0]);
     for (String propName : readablePropertyNames) {
@@ -89,9 +97,13 @@ public class Reflector {
     }
   }
 
+  /**
+   * 记录所有record类型的方法到map中，record一定是不带歧义的
+   */
   private void addRecordGetMethods(Method[] methods) {
-    Arrays.stream(methods).filter(m -> m.getParameterTypes().length == 0)
-        .forEach(m -> addGetMethod(m.getName(), m, false));
+    Arrays.stream(methods)
+      .filter(m -> m.getParameterTypes().length == 0)
+      .forEach(m -> addGetMethod(m.getName(), m, false));
   }
 
   /**
@@ -107,24 +119,33 @@ public class Reflector {
 
   private void addGetMethods(Method[] methods) {
     Map<String, List<Method>> conflictingGetters = new HashMap<>();
-    Arrays.stream(methods).filter(m -> m.getParameterTypes().length == 0 && PropertyNamer.isGetter(m.getName()))
-        .forEach(m -> addMethodConflict(conflictingGetters, PropertyNamer.methodToProperty(m.getName()), m));
+    Arrays.stream(methods)
+      .filter(m -> m.getParameterTypes().length == 0 && PropertyNamer.isGetter(m.getName()))
+      .forEach(m -> addMethodConflict(conflictingGetters, PropertyNamer.methodToProperty(m.getName()), m));
     resolveGetterConflicts(conflictingGetters);
   }
 
+  /**
+   * 解决getter的冲突，即一个属性匹配多个方法时选择最匹配的方法
+   * NOTE: 因为继承的存在，一个同名的方法会有多个实现，核心在于选择子类实现
+   */
   private void resolveGetterConflicts(Map<String, List<Method>> conflictingGetters) {
     for (Entry<String, List<Method>> entry : conflictingGetters.entrySet()) {
       Method winner = null;
       String propName = entry.getKey();
+
       boolean isAmbiguous = false;
       for (Method candidate : entry.getValue()) {
+        // 默认第一个是获胜者
         if (winner == null) {
           winner = candidate;
           continue;
         }
+
         Class<?> winnerType = winner.getReturnType();
         Class<?> candidateType = candidate.getReturnType();
         if (candidateType.equals(winnerType)) {
+          // 类型相同
           if (!boolean.class.equals(candidateType)) {
             isAmbiguous = true;
             break;
@@ -145,6 +166,9 @@ public class Reflector {
     }
   }
 
+  /**
+   * 记录get方法，以及方法的返回值类型
+   */
   private void addGetMethod(String name, Method method, boolean isAmbiguous) {
     MethodInvoker invoker = isAmbiguous ? new AmbiguousMethodInvoker(method, MessageFormat.format(
         "Illegal overloaded getter method with ambiguous type for property ''{0}'' in class ''{1}''. This breaks the JavaBeans specification and can cause unpredictable results.",
@@ -156,11 +180,15 @@ public class Reflector {
 
   private void addSetMethods(Method[] methods) {
     Map<String, List<Method>> conflictingSetters = new HashMap<>();
-    Arrays.stream(methods).filter(m -> m.getParameterTypes().length == 1 && PropertyNamer.isSetter(m.getName()))
-        .forEach(m -> addMethodConflict(conflictingSetters, PropertyNamer.methodToProperty(m.getName()), m));
+    Arrays.stream(methods)
+      .filter(m -> m.getParameterTypes().length == 1 && PropertyNamer.isSetter(m.getName()))
+      .forEach(m -> addMethodConflict(conflictingSetters, PropertyNamer.methodToProperty(m.getName()), m));
     resolveSetterConflicts(conflictingSetters);
   }
 
+  /**
+   * 将属性与其对应的method放入到map中，排除一些特殊的属性
+   */
   private void addMethodConflict(Map<String, List<Method>> conflictingMethods, String name, Method method) {
     if (isValidPropertyName(name)) {
       List<Method> list = MapUtil.computeIfAbsent(conflictingMethods, name, k -> new ArrayList<>());
@@ -172,9 +200,11 @@ public class Reflector {
     for (Entry<String, List<Method>> entry : conflictingSetters.entrySet()) {
       String propName = entry.getKey();
       List<Method> setters = entry.getValue();
+
       Class<?> getterType = getTypes.get(propName);
       boolean isGetterAmbiguous = getMethods.get(propName) instanceof AmbiguousMethodInvoker;
       boolean isSetterAmbiguous = false;
+
       Method match = null;
       for (Method setter : setters) {
         if (!isGetterAmbiguous && setter.getParameterTypes()[0].equals(getterType)) {
@@ -222,6 +252,9 @@ public class Reflector {
     setTypes.put(name, typeToClass(paramTypes[0]));
   }
 
+  /**
+   * Type转具体的class
+   */
   private Class<?> typeToClass(Type src) {
     Class<?> result = null;
     if (src instanceof Class) {
@@ -243,6 +276,9 @@ public class Reflector {
     return result;
   }
 
+  /**
+   * 处理剩下的field，若其没有get、set方法，则造一个反射实现的方法来作为默认方法
+   */
   private void addFields(Class<?> clazz) {
     Field[] fields = clazz.getDeclaredFields();
     for (Field field : fields) {
@@ -251,7 +287,7 @@ public class Reflector {
         // modification of final fields through reflection (JSR-133). (JGB)
         // pr #16 - final static can only be set by the classloader
         int modifiers = field.getModifiers();
-        if ((!Modifier.isFinal(modifiers) || !Modifier.isStatic(modifiers))) {
+        if (!Modifier.isFinal(modifiers) || !Modifier.isStatic(modifiers)) {
           addSetField(field);
         }
       }
@@ -280,32 +316,34 @@ public class Reflector {
     }
   }
 
+  /**
+   * 判断是否是有效的属性
+   * 排除特殊生成的属性、序列化id
+   */
   private boolean isValidPropertyName(String name) {
     return (!name.startsWith("$") && !"serialVersionUID".equals(name) && !"class".equals(name));
   }
 
+
   /**
-   * This method returns an array containing all methods declared in this class and any superclass. We use this method,
-   * instead of the simpler <code>Class.getMethods()</code>, because we want to look for private methods as well.
-   *
-   * @param clazz
-   *          The class
-   *
-   * @return An array containing all methods in this class
+   * 获取当前类及其父类的所有方法
    */
   private Method[] getClassMethods(Class<?> clazz) {
     Map<String, Method> uniqueMethods = new HashMap<>();
     Class<?> currentClass = clazz;
+
+    // 逐层遍历当前类以及其父类
     while (currentClass != null && currentClass != Object.class) {
+      // 当前类
       addUniqueMethods(uniqueMethods, currentClass.getDeclaredMethods());
 
-      // we also need to look for interface methods -
-      // because the class may be abstract
+      // 当前类的所有接口
       Class<?>[] interfaces = currentClass.getInterfaces();
       for (Class<?> anInterface : interfaces) {
         addUniqueMethods(uniqueMethods, anInterface.getMethods());
       }
 
+      // 指向父类
       currentClass = currentClass.getSuperclass();
     }
 
@@ -314,6 +352,9 @@ public class Reflector {
     return methods.toArray(new Method[0]);
   }
 
+  /**
+   * 把方法放入map中，过滤桥接方法
+   */
   private void addUniqueMethods(Map<String, Method> uniqueMethods, Method[] methods) {
     for (Method currentMethod : methods) {
       if (!currentMethod.isBridge()) {
@@ -478,7 +519,7 @@ public class Reflector {
   }
 
   /**
-   * Class.isRecord() alternative for Java 15 and older.
+   * 判断当前类是否是record类
    */
   private static boolean isRecord(Class<?> clazz) {
     try {
@@ -488,6 +529,9 @@ public class Reflector {
     }
   }
 
+  /**
+   * 获取isRecord方法
+   */
   private static MethodHandle getIsRecordMethodHandle() {
     MethodHandles.Lookup lookup = MethodHandles.lookup();
     MethodType mt = MethodType.methodType(boolean.class);
